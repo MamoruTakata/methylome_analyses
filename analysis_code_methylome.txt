@@ -1,0 +1,89 @@
+#Venn diagram in YPK
+python3 venn_diagram.py Dataset\ S8.xlsx Dataset\ S6.xlsx venn_out_YPK
+
+#Venn diagram in OPK
+python3 venn_diagram.py Dataset\ S8.xlsx Dataset\ S7.xlsx venn_out_OPK
+
+
+#Comparison of methylation rates between YPK and OPK (Input: methylBase_CG.txt, Output: logistic_regression_more10_formula.txt)
+python3 logistic_more10_formula.py
+
+
+#Edit output file
+awk '$1 ~ /^Scaffold_[1-9]$|^Scaffold_1[0-9]$|^Scaffold_20$|^Scaffold_21$/ && $4 != ""' logistic_regression_more10_formula.txt | \
+sed 's/^Scaffold_//' | \
+sort -k1,1n -k2,2n | \
+tr ' ' '\t' > logistic_regression_more10_formula_2.txt
+
+#SLIM correction (Input: logistic_regression_more10_formula_2.txt, Output: logistic_regression_more10_formula_qvalue.txt)
+R --vanilla --slave ./logistic_more10_SLIM.R
+
+#Difference in methylation rates (Input: methylBase_CG.txt, Output: meth_diff_more10_results.txt)
+python3 meth_diff_more10.py
+
+
+#Merge meth_diff to logistic_regression_more10_formula_qvalue.txt
+join -t $'\t' <(sort -k1,1 -k2,2 logistic_regression_more10_formula_qvalue.txt) <(sed 's/^Scaffold_//' meth_diff_more10_results.txt | sort -k1,1 -k2,2) > logistic_regression_more10_formula_qvalue_comparison_with_methdiff.txt
+
+#Volcano plot 
+python3 volcano.py
+
+
+#manhattan plot
+python3 manhattan_meth.py
+
+
+
+#Estimation of gene region
+awk '$3 == "gene" {print $1, $4-1, $5, $9, ".", $7}' OFS="\t" blast_annotate_AED05.gtf > genes.bed
+
+#Estimation of exon region
+awk '$3 == "exon" {print $1, $4-1, $5, $9, ".", $7}' OFS="\t" blast_annotate_AED05.gtf > exons.bed
+
+
+#Extract hypermethylated CpG sites
+awk -F'\t' 'NR==1 || ($5 <= 0.01 && ($7 >= 25 || $7 <= -25))' logistic_regression_more10_formula_qvalue_with_methdiff.txt > logistic_regression_more10_formula_qvalue_0.01_25.txt
+
+#Change to bed file
+awk 'BEGIN{FS=OFS="\t"}{if(NR>1) {print $1, $2-1, $2, $3, $4, $5, $6, $7 }}' logistic_regression_more10_formula_qvalue_0.01_25.txt > logistic_regression_more10_formula_qvalue_0.01_25.bed
+
+
+#gtf to bed
+awk '$3 == "gene" {print $1, $4-1, $5, $9, ".", $7}' blast_annotate_AED05.gtf > genes.bed
+
+#add promoter regions
+bedtools slop -i genes.bed -g genome_length.txt -b 1000 > expanded_blast_annotate_AED05.bed
+awk '{gsub(/^Scaffold_/, "", $1); print}' OFS="\t" expanded_blast_annotate_AED05.bed > expanded_blast_annotate_AED05_fixed.bed
+
+#Extract hypermethylated genes 
+bedtools intersect -wa -wb -a logistic_regression_more10_formula_qvalue_0.01_25.bed -b expanded_blast_annotate_AED05_fixed.bed > all_hypermethylated_gene.bed
+
+#List of hypermethylated genes 
+awk '{print $12}' all_hypermethylated_gene.bed | sed -E 's/(ANN[0-9]{5}).*/\1/' | sort | uniq > all_hypermethylated_gene.txt
+
+#Bed file of hypermethylated genes
+grep -Ff all_hypermethylated_gene.txt expanded_blast_annotate_AED05_fixed.bed > all_hypermethylated_gene_2.bed
+
+
+
+###Correlation analysis with the nymph ratio of offspring
+python3 ratio_corr_pvalue_M_more10.py
+
+
+#Edit output file
+awk '$1 ~ /^Scaffold_[1-9]$|^Scaffold_1[0-9]$|^Scaffold_20$|^Scaffold_21$/ && $4 != ""' ratio_corr_pvalue_M_more10.out | \
+sed 's/^Scaffold_//' | \
+sort -k1,1n -k2,2n | \
+tr ' ' '\t' > ratio_corr_pvalue_M_more10_2.out
+
+#Change to bed file
+awk '{print $1, $2-1, $2, $3, $4}' ratio_corr_pvalue_M_more10_2.out | tr ' ' '\t' > ratio_corr_pvalue_M_more10_2.bed
+
+#Extract correlation data with the nymph ratio within hypermethylated genes
+bedtools intersect -wa -a ratio_corr_pvalue_M_more10_2.bed -b all_hypermethylated_gene_2.bed > ratio_corr_pvalue_M_more10_hypermeth.bed
+
+#manhattan plot
+python3 manhattan_pvalue_M_more10_hypermeth.py
+
+#qqplot
+python3 qqplot_pvalue_M_more10_hypermeth.py
